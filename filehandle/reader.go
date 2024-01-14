@@ -1,8 +1,6 @@
 package filehandle
 
 import (
-	"io/fs"
-	"io/ioutil"
 	"os"
 	"path"
 	"sync"
@@ -10,59 +8,67 @@ import (
 )
 
 func CalculateDirectoryAllFileSize(dirPath string) (int64, error) {
-	infos, readErr := ioutil.ReadDir(dirPath)
+	dirEntryList, readErr := os.ReadDir(dirPath)
 	if os.IsNotExist(readErr) {
 		return 0, nil
 	}
 	if readErr != nil {
 		return 0, readErr
 	}
-	if len(infos) <= 0 {
+	if len(dirEntryList) <= 0 {
 		return 0, nil
 	}
 
 	var filesSize int64
-	for _, info := range infos {
-		if info.IsDir() {
+	for _, entry := range dirEntryList {
+		if entry.IsDir() {
 			continue
 		}
-		filesSize += info.Size()
+		fileInfo, errFileInfo := entry.Info()
+		if errFileInfo != nil {
+			return 0, errFileInfo
+		}
+		filesSize += fileInfo.Size()
 	}
 
 	return filesSize, nil
 }
 
 func CalculateAllFileSizeThroughRecursion(dirPath string, replyFilesSize *int64) error {
-	infos, readErr := ioutil.ReadDir(dirPath)
+	dirEntryList, readErr := os.ReadDir(dirPath)
 	if os.IsNotExist(readErr) {
 		return nil
 	}
 	if readErr != nil {
 		return readErr
 	}
-	if len(infos) <= 0 {
+	if len(dirEntryList) <= 0 {
 		return nil
 	}
 
-	var dirInfo []fs.FileInfo
-	for _, info := range infos {
-		if info.IsDir() {
-			dirInfo = append(dirInfo, info)
+	var subDirPaths []string
+	for _, entry := range dirEntryList {
+		if entry.IsDir() {
+			subDirPaths = append(subDirPaths, path.Join(dirPath, entry.Name()))
 			continue
 		}
-		atomic.AddInt64(replyFilesSize, info.Size())
+		fileInfo, errFileInfo := entry.Info()
+		if errFileInfo != nil {
+			return errFileInfo
+		}
+		atomic.AddInt64(replyFilesSize, fileInfo.Size())
 	}
-	if len(dirInfo) <= 0 {
+	if len(subDirPaths) == 0 {
 		return nil
 	}
 
 	var wg sync.WaitGroup
-	wg.Add(len(dirInfo))
-	for _, info := range dirInfo {
-		go func(info fs.FileInfo) {
+	wg.Add(len(subDirPaths))
+	for _, subDirPath := range subDirPaths {
+		go func(dirPath string) {
 			defer wg.Done()
-			CalculateAllFileSizeThroughRecursion(path.Join(dirPath, info.Name()), replyFilesSize)
-		}(info)
+			CalculateAllFileSizeThroughRecursion(dirPath, replyFilesSize)
+		}(subDirPath)
 	}
 	wg.Wait()
 
